@@ -35,7 +35,7 @@ export const useCustomerOrderStore = create<CustomerOrderStore>()(
             cartItem.customInstructions === customInstructions
         );
 
-        let newCart = [...state.cart];
+        const newCart = [...state.cart];
 
         if (existingItemIndex > -1) {
           // If item with exact same instructions exists, merge quantity

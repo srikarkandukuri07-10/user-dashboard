@@ -21,7 +21,9 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     
     const initialTheme = savedTheme || (prefersDark ? 'dark' : 'light')
     
-    setTheme(initialTheme)
+    setTimeout(() => {
+      setTheme(initialTheme)
+    }, 0)
     
     if (initialTheme === 'dark') {
       document.documentElement.classList.add('dark')

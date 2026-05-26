@@ -20,11 +20,12 @@ export default function Home() {
 
   // 1. Hydration guard to safely load Zustand persisted state only on the client
   useEffect(() => {
-    setMounted(true);
-
-    const storeState = useCustomerOrderStore.getState();
-    setSelectedTable(storeState.selectedTable);
-    setOrders(storeState.orders || []);
+    const timer = setTimeout(() => {
+      setMounted(true);
+      const storeState = useCustomerOrderStore.getState();
+      setSelectedTable(storeState.selectedTable);
+      setOrders(storeState.orders || []);
+    }, 0);
 
     // Subscribe to Zustand store changes to keep state perfectly synchronized
     const unsubscribe = useCustomerOrderStore.subscribe((state) => {

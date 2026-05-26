@@ -66,12 +66,7 @@ export default function MenuManagementPage() {
     })
   })
 
-  // Set default category when categories populate
-  useEffect(() => {
-    if (categories.length > 0 && !categoryId) {
-      setCategoryId(categories[0].id)
-    }
-  }, [categories, categoryId])
+
 
   // Handle opening dialog for ADDING a menu item
   const handleOpenAdd = () => {

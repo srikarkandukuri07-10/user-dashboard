@@ -23,14 +23,15 @@ export default function OrdersPage() {
   const [updatingId, setUpdatingId] = useState<string | null>(null)
   
   // Track elapsed time for SLA badges
-  const [timeTicker, setTimeTicker] = useState(0)
+  const [now, setNow] = useState<number | null>(null)
 
   useEffect(() => {
     fetchOrders()
+    setTimeout(() => setNow(Date.now()), 0)
     
     // Refresh elapsed time counters every 30 seconds
     const interval = setInterval(() => {
-      setTimeTicker((prev) => prev + 1)
+      setNow(Date.now())
     }, 30000)
 
     return () => clearInterval(interval)
@@ -43,8 +44,9 @@ export default function OrdersPage() {
 
   // Calculate elapsed minutes since order creation
   const getElapsedMinutes = (createdAtString: string) => {
+    if (now === null) return 0
     const created = new Date(createdAtString)
-    const diffMs = Date.now() - created.getTime()
+    const diffMs = Math.max(0, now - created.getTime())
     return Math.floor(diffMs / 60000)
   }
 
