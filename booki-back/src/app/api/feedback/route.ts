@@ -4,6 +4,20 @@ import { getAdminSession } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+}
+
+// OPTIONS: Preflight CORS request handler
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: CORS_HEADERS,
+  })
+}
+
 // GET: Fetch aggregated feedback analytics and text reviews (Admin only)
 export async function GET() {
   try {
@@ -132,10 +146,10 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { value, comment, menuItemId } = body // value matches MUST_TRY, VERY_TASTY, GOOD, OK
+    const { value, comment, menuItemId, menuItemName } = body // value matches MUST_TRY, VERY_TASTY, GOOD, OK
 
     if (!value) {
-      return NextResponse.json({ error: 'Feedback rating value is required' }, { status: 400 })
+      return NextResponse.json({ error: 'Feedback rating value is required' }, { status: 400, headers: CORS_HEADERS })
     }
 
     // Format value string to Prisma Enum representation
@@ -151,18 +165,42 @@ export async function POST(req: NextRequest) {
     if (!enumValue) {
       return NextResponse.json(
         { error: 'Invalid feedback value. Must be one of: "Must Try", "Very Tasty", "Good", "OK"' },
-        { status: 400 }
+        { status: 400, headers: CORS_HEADERS }
       )
     }
 
-    // If menuItemId is provided, verify item exists
+    // Resolve active database menu item ID
+    let resolvedItemId: string | null = null
+
     if (menuItemId) {
-      const item = await db.menuItem.findUnique({
-        where: { id: menuItemId },
-      })
-      if (!item) {
-        return NextResponse.json({ error: 'Linked menu item not found' }, { status: 404 })
+      // 1. Try fetching by ID directly
+      let item = null
+      
+      // Basic UUID structure validation to prevent Prisma crashes on static IDs (e.g. "start_01")
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(menuItemId)
+      if (isUuid) {
+        item = await db.menuItem.findUnique({
+          where: { id: menuItemId },
+        })
       }
+
+      // 2. Fallback: Query by case-insensitive name if ID match failed
+      if (!item && menuItemName) {
+        item = await db.menuItem.findFirst({
+          where: {
+            name: {
+              equals: menuItemName.trim(),
+              mode: 'insensitive',
+            },
+          },
+        })
+      }
+
+      if (!item) {
+        return NextResponse.json({ error: 'Linked menu item not found' }, { status: 404, headers: CORS_HEADERS })
+      }
+      
+      resolvedItemId = item.id // Ensure we bind the feedback to the correct database UUID!
     }
 
     // Save feedback
@@ -170,16 +208,16 @@ export async function POST(req: NextRequest) {
       data: {
         value: enumValue,
         comment: comment || '',
-        menuItemId: menuItemId || null,
+        menuItemId: resolvedItemId,
       },
     })
 
-    return NextResponse.json({ success: true, data: feedback }, { status: 201 })
+    return NextResponse.json({ success: true, data: feedback }, { status: 201, headers: CORS_HEADERS })
   } catch (error) {
     console.error('Submit Feedback API error:', error)
     return NextResponse.json(
       { error: 'Failed to submit feedback' },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     )
   }
 }

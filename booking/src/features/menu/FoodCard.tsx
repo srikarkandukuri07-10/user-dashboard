@@ -12,6 +12,7 @@ interface FoodCardProps {
 
 export default function FoodCard({ item }: FoodCardProps) {
   const { cart, addToCart } = useCustomerOrderStore();
+  const isAvailable = item.availability !== false;
   const [instructions, setInstructions] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [showFeedbackDetails, setShowFeedbackDetails] = useState(false);
@@ -24,7 +25,17 @@ export default function FoodCard({ item }: FoodCardProps) {
 
   // Identify the highest feedback reaction to show as the main badge
   const getTopFeedback = () => {
-    const { mustTry, veryTasty, good, ok } = item.feedback;
+    // If dynamic feedbackStats are available from the database, use them!
+    if ((item as any).feedbackStats) {
+      const stats = (item as any).feedbackStats;
+      const pct = stats.percentage;
+      if (stats.rating === "MUST_TRY") return { label: "Must Try", icon: <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />, pct };
+      if (stats.rating === "VERY_TASTY") return { label: "Very Tasty", icon: <Heart className="w-3.5 h-3.5 text-red-500 fill-red-500" />, pct };
+      if (stats.rating === "GOOD") return { label: "Good", icon: <ThumbsUp className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400" />, pct };
+      return { label: "OK", icon: <Smile className="w-3.5 h-3.5 text-neutral-400" />, pct };
+    }
+
+    const { mustTry, veryTasty, good, ok } = item.feedback || { mustTry: 10, veryTasty: 10, good: 10, ok: 1 };
     const maxVal = Math.max(mustTry, veryTasty, good, ok);
     if (maxVal === mustTry) return { label: "Must Try", icon: <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />, pct: mustTry };
     if (maxVal === veryTasty) return { label: "Very Tasty", icon: <Heart className="w-3.5 h-3.5 text-red-500 fill-red-500" />, pct: veryTasty };
@@ -49,7 +60,9 @@ export default function FoodCard({ item }: FoodCardProps) {
   return (
     <motion.div 
       layout
-      className="glass-card rounded-3xl overflow-hidden flex flex-col w-full relative transition-all duration-300 border border-white/[0.05]"
+      className={`glass-card rounded-3xl overflow-hidden flex flex-col w-full relative transition-all duration-300 border border-white/[0.05] ${
+        !isAvailable ? "opacity-50 grayscale" : ""
+      }`}
     >
       {/* Visual Header / Image Container */}
       <div className="h-44 w-full relative bg-neutral-900 overflow-hidden">
@@ -62,6 +75,14 @@ export default function FoodCard({ item }: FoodCardProps) {
         />
         {/* Image overlay gradient */}
         <div className="absolute inset-0 bg-gradient-to-t from-[#121211] via-transparent to-transparent opacity-80" />
+
+        {!isAvailable && (
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] flex items-center justify-center z-10 pointer-events-none">
+            <span className="bg-red-500/10 text-red-400 border border-red-500/20 px-4 py-2 rounded-full font-black uppercase tracking-widest text-[11px] shadow-[0_0_15px_rgba(239,68,68,0.2)]">
+              Not Available Today
+            </span>
+          </div>
+        )}
 
         {/* Veg/Non-veg Dot Badge */}
         <div className="absolute top-3 left-3 bg-neutral-950/80 backdrop-blur-md px-2.5 py-1 rounded-full flex items-center gap-1.5 border border-white/10">
@@ -122,31 +143,40 @@ export default function FoodCard({ item }: FoodCardProps) {
               <h4 className="font-bold text-neutral-400 mb-2 uppercase tracking-widest text-[9px]">
                 Community Reactions
               </h4>
-              <div className="grid grid-cols-2 gap-2 text-neutral-300">
-                <div className="flex items-center justify-between bg-white/[0.02] p-1.5 rounded-lg">
-                  <span className="flex items-center gap-1 text-neutral-400">
-                    <Star className="w-3 h-3 text-amber-400 fill-amber-400" /> Must Try
-                  </span>
-                  <span className="font-semibold text-amber-400">{item.feedback.mustTry}%</span>
-                </div>
-                <div className="flex items-center justify-between bg-white/[0.02] p-1.5 rounded-lg">
-                  <span className="flex items-center gap-1 text-neutral-400">
-                    <Heart className="w-3 h-3 text-red-500 fill-red-500" /> Very Tasty
-                  </span>
-                  <span className="font-semibold text-red-500">{item.feedback.veryTasty}%</span>
-                </div>
-                <div className="flex items-center justify-between bg-white/[0.02] p-1.5 rounded-lg">
-                  <span className="flex items-center gap-1 text-neutral-400">
-                    <ThumbsUp className="w-3 h-3 text-emerald-400 fill-emerald-400" /> Good
-                  </span>
-                  <span className="font-semibold text-emerald-400">{item.feedback.good}%</span>
-                </div>
-                <div className="flex items-center justify-between bg-white/[0.02] p-1.5 rounded-lg">
-                  <span className="flex items-center gap-1 text-neutral-400">
-                    <Smile className="w-3 h-3 text-neutral-400" /> OK
-                  </span>
-                  <span className="font-semibold text-neutral-400">{item.feedback.ok}%</span>
-                </div>
+              {/* Real-time Reaction Details Grid (Expandable) */}
+              <div className="grid grid-cols-1 text-neutral-300">
+                {(item as any).feedbackStats ? (
+                  <div className="bg-white/[0.02] p-2.5 rounded-xl border border-white/5 text-center leading-relaxed">
+                    This dish is rated <span className="text-orange-500 font-extrabold uppercase">{(item as any).feedbackStats.rating.replace('_', ' ')}</span> by <span className="text-orange-500 font-extrabold">{(item as any).feedbackStats.percentage}%</span> of customers (based on {(item as any).feedbackStats.totalCount} recent votes).
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex items-center justify-between bg-white/[0.02] p-1.5 rounded-lg">
+                      <span className="flex items-center gap-1 text-neutral-400">
+                        <Star className="w-3 h-3 text-amber-400 fill-amber-400" /> Must Try
+                      </span>
+                      <span className="font-semibold text-amber-400">{(item.feedback || {}).mustTry || 0}%</span>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-1.5 rounded-lg">
+                      <span className="flex items-center gap-1 text-neutral-400">
+                        <Heart className="w-3 h-3 text-red-500 fill-red-500" /> Very Tasty
+                      </span>
+                      <span className="font-semibold text-red-500">{(item.feedback || {}).veryTasty || 0}%</span>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-1.5 rounded-lg">
+                      <span className="flex items-center gap-1 text-neutral-400">
+                        <ThumbsUp className="w-3 h-3 text-emerald-400 fill-emerald-400" /> Good
+                      </span>
+                      <span className="font-semibold text-emerald-400">{(item.feedback || {}).good || 0}%</span>
+                    </div>
+                    <div className="flex items-center justify-between bg-white/[0.02] p-1.5 rounded-lg">
+                      <span className="flex items-center gap-1 text-neutral-400">
+                        <Smile className="w-3 h-3 text-neutral-400" /> OK
+                      </span>
+                      <span className="font-semibold text-neutral-400">{(item.feedback || {}).ok || 0}%</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
@@ -162,18 +192,21 @@ export default function FoodCard({ item }: FoodCardProps) {
             placeholder="Add special instructions (e.g. less spicy)..."
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
-            className="w-full text-[11px] py-2.5 pl-8 pr-3 rounded-xl bg-black/40 border border-white/5 text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-amber-500/50 transition-colors"
+            disabled={!isAvailable}
+            className="w-full text-[11px] py-2.5 pl-8 pr-3 rounded-xl bg-black/40 border border-white/5 text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-amber-500/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed font-medium"
           />
         </div>
 
         {/* Add and Quantity Controls Container */}
         <div className="flex items-center gap-2 mt-auto">
           {/* Custom Quantity Stepper for local add state */}
-          <div className="flex items-center bg-black/40 border border-white/5 rounded-full p-1">
+          <div className={`flex items-center bg-black/40 border border-white/5 rounded-full p-1 transition-opacity duration-300 ${
+            !isAvailable ? "opacity-30 pointer-events-none" : ""
+          }`}>
             <button
               onClick={() => setQuantity(Math.max(1, quantity - 1))}
               className="w-7 h-7 flex items-center justify-center text-neutral-400 hover:text-neutral-200 transition-colors disabled:opacity-30 disabled:pointer-events-none"
-              disabled={quantity <= 1}
+              disabled={quantity <= 1 || !isAvailable}
             >
               <Minus className="w-3.5 h-3.5" />
             </button>
@@ -183,6 +216,7 @@ export default function FoodCard({ item }: FoodCardProps) {
             <button
               onClick={() => setQuantity(quantity + 1)}
               className="w-7 h-7 flex items-center justify-center text-neutral-400 hover:text-neutral-200 transition-colors"
+              disabled={!isAvailable}
             >
               <Plus className="w-3.5 h-3.5" />
             </button>
@@ -191,9 +225,11 @@ export default function FoodCard({ item }: FoodCardProps) {
           {/* Action Trigger Button */}
           <button
             onClick={handleAdd}
-            disabled={isAddedAnimation}
+            disabled={isAddedAnimation || !isAvailable}
             className={`flex-grow h-9 rounded-full font-bold text-xs tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all duration-300 cursor-pointer select-none ${
-              isAddedAnimation
+              !isAvailable
+                ? "bg-neutral-800 text-neutral-500 border border-white/5 shadow-none cursor-not-allowed"
+                : isAddedAnimation
                 ? "bg-emerald-500 text-neutral-950 shadow-[0_0_12px_rgba(16,185,129,0.4)]"
                 : "bg-amber-500 text-neutral-950 hover:bg-amber-600 shadow-[0_0_12px_rgba(245,158,11,0.25)]"
             }`}

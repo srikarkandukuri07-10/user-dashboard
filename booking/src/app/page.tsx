@@ -8,28 +8,56 @@ import FoodCard from "@/features/menu/FoodCard";
 import CartDrawer from "@/features/cart/CartDrawer";
 import { MENU_DATA, CATEGORIES } from "@/data/menuData";
 import { motion, AnimatePresence } from "framer-motion";
-import { Utensils, RotateCcw, AlertTriangle, Clock, CookingPot, CheckCircle2 } from "lucide-react";
+import { Utensils, RotateCcw, AlertTriangle, Clock, CookingPot, CheckCircle2, MessageSquare } from "lucide-react";
+import FeedbackModal from "@/features/feedback/FeedbackModal";
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [customerName, setCustomerNameState] = useState<string | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>("Starters");
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const [dietaryFilter, setDietaryFilter] = useState<"ALL" | "VEG" | "NON_VEG">("ALL");
+  const [currentTokenRunning, setCurrentTokenRunning] = useState<number>(1);
 
+  const [menuItems, setMenuItems] = useState<any[]>(MENU_DATA);
   const setTable = useCustomerOrderStore((state) => state.setTable);
 
-  // 1. Hydration guard to safely load Zustand persisted state only on the client
+  // Derive visible categories that have at least one item matching the current filter
+  const visibleCategories = (CATEGORIES as readonly string[]).filter((category) => {
+    const items = menuItems.filter((item) => item.category === category);
+    if (dietaryFilter === "ALL") return items.length > 0;
+    if (dietaryFilter === "VEG") return items.some((item) => item.veg === true);
+    if (dietaryFilter === "NON_VEG") return items.some((item) => item.veg === false);
+    return false;
+  });
+
+  // Auto-switch to first available category if the current activeCategory gets filtered out
   useEffect(() => {
+    if (mounted && visibleCategories.length > 0 && !visibleCategories.includes(activeCategory)) {
+      setActiveCategory(visibleCategories[0]);
+    }
+  }, [dietaryFilter, menuItems, activeCategory, mounted]);
+
+  // 1a. Hydration guard to safely load Zustand persisted state only on the client
+  useEffect(() => {
+    // Explicitly reset selectedTable and customerName on initial mount so refreshing/reopening always prompts for table
+    useCustomerOrderStore.getState().setTable(null);
+    useCustomerOrderStore.getState().setCustomerName(null);
+
     const timer = setTimeout(() => {
       setMounted(true);
       const storeState = useCustomerOrderStore.getState();
       setSelectedTable(storeState.selectedTable);
+      setCustomerNameState(storeState.customerName);
       setOrders(storeState.orders || []);
     }, 0);
 
     // Subscribe to Zustand store changes to keep state perfectly synchronized
     const unsubscribe = useCustomerOrderStore.subscribe((state) => {
       setSelectedTable(state.selectedTable);
+      setCustomerNameState(state.customerName);
       setOrders(state.orders || []);
     });
 
@@ -43,11 +71,101 @@ export default function Home() {
           ? `Table ${cleanedTable}` 
           : cleanedTable;
         setTable(formattedTable);
+        
+        // Clean/remove the query parameters from the address bar so that
+        // refreshing the page later will ask for the table number again!
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
       }
     }
 
     return () => unsubscribe();
   }, [setTable]);
+
+  // 1b. Fetch active menu items dynamically from backend database (with static fallback)
+  const fetchDynamicMenu = async () => {
+    try {
+      const envUrl = process.env.NEXT_PUBLIC_API_URL || "https://booki-admin-backend.vercel.app";
+      // Ensure https for localhost fallback
+      const backendUrl = (envUrl.startsWith("http://localhost") || envUrl.startsWith("http://127.0.0.1")) 
+        ? envUrl.replace("http://", "https://") 
+        : envUrl;
+        
+      let res;
+      try {
+        res = await fetch(`${backendUrl}/api/menu?public=true`);
+      } catch (fetchErr) {
+        console.warn("⚠️ Primary backend fetch failed, trying live production API...", fetchErr);
+        res = await fetch("https://booki-admin-backend.vercel.app/api/menu?public=true");
+      }
+      
+      const data = await res.json();
+      
+      if (data.success && data.categories) {
+        const dbItems: any[] = [];
+        data.categories.forEach((cat: any) => {
+          cat.items.forEach((item: any) => {
+            dbItems.push({
+              id: item.id,
+              name: item.name,
+              category: cat.name,
+              price: item.price,
+              image: item.image,
+              veg: item.veg,
+              availability: item.availability !== undefined ? item.availability : true,
+              description: item.description,
+              feedback: item.feedback || { mustTry: 10, veryTasty: 10, good: 10, ok: 1 },
+              feedbackStats: item.feedbackStats || null // Map dynamic feedback statistics from database!
+            });
+          });
+        });
+        
+        if (dbItems.length > 0) {
+          setMenuItems(dbItems);
+          console.log(`🍟 Loaded ${dbItems.length} active menu items from backend!`);
+        }
+      }
+    } catch (err) {
+      console.warn("⚠️ Failed to load menu from database, using offline static fallback.", err);
+    }
+  };
+
+  const fetchCurrentToken = async () => {
+    try {
+      const envUrl = process.env.NEXT_PUBLIC_API_URL || "https://booki-admin-backend.vercel.app";
+      const backendUrl = (envUrl.startsWith("http://localhost") || envUrl.startsWith("http://127.0.0.1")) 
+        ? envUrl.replace("http://", "https://") 
+        : envUrl;
+        
+      const res = await fetch(`${backendUrl}/api/token/running`);
+      const data = await res.json();
+      if (data.success && typeof data.currentToken === "number") {
+        setCurrentTokenRunning(data.currentToken);
+      }
+    } catch (err) {
+      console.warn("⚠️ Failed to load current running token:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (mounted) {
+      fetchDynamicMenu();
+      fetchCurrentToken();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted]);
+
+  // 1c. Fast periodic background menu polling to catch availability updates
+  useEffect(() => {
+    if (!mounted) return;
+
+    const pollMenuInterval = setInterval(() => {
+      fetchDynamicMenu();
+      fetchCurrentToken(); // Also sync running token!
+    }, 2000); // Poll every 2 seconds for immediate menu availability sync!
+
+    return () => clearInterval(pollMenuInterval);
+  }, [mounted]);
 
   // 2a. Connect socket + bind status listener ONCE on mount only
   // Having `orders` in deps caused a new listener to be added every time an update arrived!
@@ -66,12 +184,26 @@ export default function Home() {
       }));
     };
 
+    const handleMenuUpdate = () => {
+      console.log("📡 Realtime menu update detected via Socket.IO, re-fetching...");
+      fetchDynamicMenu();
+    };
+
+    const handleTokenUpdate = (data: { currentToken: number }) => {
+      console.log("📡 Token running update received via Socket.IO:", data.currentToken);
+      setCurrentTokenRunning(data.currentToken);
+    };
+
     socket.on("status-changed", handleStatusChange);
-    console.log("📡 Socket.IO: status-changed listener bound.");
+    socket.on("menu-updated", handleMenuUpdate);
+    socket.on("current-token-updated", handleTokenUpdate);
+    console.log("📡 Socket.IO: status-changed, menu-updated & current-token-updated listeners bound.");
 
     return () => {
       socket.off("status-changed", handleStatusChange);
-      console.log("📡 Socket.IO: status-changed listener removed.");
+      socket.off("menu-updated", handleMenuUpdate);
+      socket.off("current-token-updated", handleTokenUpdate);
+      console.log("📡 Socket.IO: listeners removed.");
     };
   }, [mounted]); // ← only runs once when component mounts
 
@@ -94,6 +226,45 @@ export default function Home() {
     // No cleanup needed — rooms persist for the session
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, orders.map((o) => o.id).join(",")]); // Only re-run when order IDs change
+
+  // 2c. Background polling fallback to track order status dynamically on Vercel
+  useEffect(() => {
+    if (!mounted || orders.length === 0) return;
+
+    const latestActiveOrder = orders.find(
+      (o) => o.status !== "DELIVERED" && o.status !== "CANCELLED" && o.status !== "SERVED"
+    );
+    if (!latestActiveOrder) return;
+
+    const pollOrderInterval = setInterval(async () => {
+      try {
+        const envUrl = process.env.NEXT_PUBLIC_API_URL || "https://booki-admin-backend.vercel.app";
+        const backendUrl = (envUrl.startsWith("http://localhost") || envUrl.startsWith("http://127.0.0.1")) 
+          ? envUrl.replace("http://", "https://") 
+          : envUrl;
+
+        const res = await fetch(`${backendUrl}/api/orders/${latestActiveOrder.id}`);
+        const data = await res.json();
+
+        if (data.success && data.order) {
+          const newStatus = data.order.status;
+          
+          if (newStatus !== latestActiveOrder.status) {
+            console.log(`📡 Background poll order status change: ${latestActiveOrder.id} → ${newStatus}`);
+            
+            // Update Zustand store directly
+            useCustomerOrderStore.setState((state) => ({
+              orders: state.orders.map((o) => (o.id === latestActiveOrder.id ? { ...o, status: newStatus } : o)),
+            }));
+          }
+        }
+      } catch (err) {
+        console.warn("⚠️ Live Order Tracker Poll failed:", err);
+      }
+    }, 5000); // Poll every 5 seconds for fast live order tracking!
+
+    return () => clearInterval(pollOrderInterval);
+  }, [mounted, orders]);
 
 
   // Scroll spy: automatically update the active category pill as the user scrolls
@@ -153,7 +324,7 @@ export default function Home() {
   }
 
   // B. Route Flow 1: Table Selection Screen
-  if (!selectedTable) {
+  if (!selectedTable || !customerName) {
     return <TableSelect />;
   }
 
@@ -180,7 +351,7 @@ export default function Home() {
           </span>
         </div>
 
-        {/* Selected Table Pill & Swap Button */}
+        {/* Selected Table Pill */}
         <div className="flex items-center gap-2">
           <div className="bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.8)] animate-pulse" />
@@ -188,14 +359,6 @@ export default function Home() {
               {selectedTable}
             </span>
           </div>
-
-          <button
-            onClick={() => setTable(null)}
-            className="w-7 h-7 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10 transition-colors text-neutral-400 hover:text-neutral-200 cursor-pointer"
-            title="Change Table"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </button>
         </div>
       </header>
 
@@ -203,10 +366,67 @@ export default function Home() {
       <CategoryNav 
         activeCategory={activeCategory} 
         setActiveCategory={setActiveCategory} 
+        categories={visibleCategories}
       />
 
       {/* 3. MENU ITEMS MAIN VIEWPORT */}
-      <main className="flex-1 w-full max-w-md mx-auto px-4 py-6 flex flex-col gap-8">
+      <main className="flex-1 w-full max-w-md mx-auto px-4 py-6 flex flex-col gap-6">
+        
+        {/* Real-time Queue Running Token Banner */}
+        <div className="w-full bg-white/[0.02] border border-white/[0.04] p-3.5 px-4 rounded-3xl flex items-center justify-between shadow-[0_4px_24px_rgba(0,0,0,0.2)] backdrop-blur-md relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-r from-amber-500/[0.01] to-transparent pointer-events-none" />
+          <div className="flex items-center gap-2.5">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+            </span>
+            <span className="text-[10px] uppercase font-black tracking-widest text-neutral-400">
+              Kitchen Token Pipeline
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider">Preparing Token:</span>
+            <span className="bg-amber-500 text-neutral-950 font-black text-xs px-2.5 py-1 rounded-lg font-mono tracking-wide shadow-sm shadow-amber-500/10">
+              #{currentTokenRunning}
+            </span>
+          </div>
+        </div>
+        
+        {/* Simple Dietary Filter (All / Veg / Non-Veg) */}
+        <div className="flex items-center justify-center gap-1.5 bg-white/[0.02] border border-white/[0.04] p-1 rounded-2xl w-fit mx-auto shadow-inner z-10 relative">
+          <button
+            onClick={() => setDietaryFilter("ALL")}
+            className={`px-4 py-1.5 rounded-xl text-[10px] uppercase tracking-wider font-extrabold cursor-pointer select-none transition-all duration-300 ${
+              dietaryFilter === "ALL"
+                ? "bg-white/10 text-neutral-100 shadow border border-white/5"
+                : "text-neutral-500 hover:text-neutral-300 border border-transparent"
+            }`}
+          >
+            All
+          </button>
+          <button
+            onClick={() => setDietaryFilter("VEG")}
+            className={`px-4 py-1.5 rounded-xl text-[10px] uppercase tracking-wider font-extrabold cursor-pointer select-none transition-all duration-300 flex items-center gap-1.5 ${
+              dietaryFilter === "VEG"
+                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/10 shadow shadow-emerald-500/5"
+                : "text-neutral-500 hover:text-neutral-300 border border-transparent"
+            }`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            Veg Only
+          </button>
+          <button
+            onClick={() => setDietaryFilter("NON_VEG")}
+            className={`px-4 py-1.5 rounded-xl text-[10px] uppercase tracking-wider font-extrabold cursor-pointer select-none transition-all duration-300 flex items-center gap-1.5 ${
+              dietaryFilter === "NON_VEG"
+                ? "bg-red-500/10 text-red-400 border border-red-500/10 shadow shadow-red-500/5"
+                : "text-neutral-500 hover:text-neutral-300 border border-transparent"
+            }`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+            Non-Veg Only
+          </button>
+        </div>
         
         {/* Real-time Live Order Status Tracker */}
         <AnimatePresence>
@@ -275,6 +495,21 @@ export default function Home() {
                     transition={{ duration: 0.8, ease: "easeOut" }}
                   />
                 </div>
+
+                {latestOrder.tokenNumber && latestOrder.tokenNumber !== currentTokenRunning ? (
+                  <div className="flex items-center justify-between border-t border-white/5 pt-2.5 mt-2.5 text-[10px] text-neutral-400 font-bold uppercase tracking-wider">
+                    <span>Your Queue Token: <span className="text-amber-500 font-extrabold font-mono text-xs">#{latestOrder.tokenNumber}</span></span>
+                    {latestOrder.tokenNumber > currentTokenRunning ? (
+                      <span>Queue Position: <span className="text-neutral-300 font-extrabold font-mono text-xs">{latestOrder.tokenNumber - currentTokenRunning} orders away</span></span>
+                    ) : (
+                      <span className="text-emerald-400 font-extrabold">In Service</span>
+                    )}
+                  </div>
+                ) : latestOrder.tokenNumber && latestOrder.tokenNumber === currentTokenRunning ? (
+                  <div className="flex items-center gap-1.5 border-t border-white/5 pt-2.5 mt-2.5 text-[10px] text-emerald-400 font-black uppercase tracking-wider animate-pulse">
+                    <span>🍽️ Your order is being served right now! Bon Appétit!</span>
+                  </div>
+                ) : null}
               </div>
             </motion.div>
           )}
@@ -288,9 +523,18 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Section Groups */}
         {CATEGORIES.map((category) => {
-          const categoryItems = MENU_DATA.filter((item) => item.category === category);
+          let categoryItems = menuItems.filter((item) => item.category === category);
+          
+          // Apply dietary Veg / Non-Veg filter dynamically
+          if (dietaryFilter === "VEG") {
+            categoryItems = categoryItems.filter((item) => item.veg === true);
+          } else if (dietaryFilter === "NON_VEG") {
+            categoryItems = categoryItems.filter((item) => item.veg === false);
+          }
+          
+          if (categoryItems.length === 0) return null; // Hide the category section completely if empty
+          
           const categoryId = `category-${category.toLowerCase().replace(/\s+/g, "-")}`;
           
           return (
@@ -323,6 +567,25 @@ export default function Home() {
 
       {/* 4. PERSISTENT SLIDING CART & FLOATING ACTION TRIGGER */}
       <CartDrawer />
+
+      {/* Floating Action Feedback Button (glowing chat logo) */}
+      <motion.button
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
+        onClick={() => setIsFeedbackOpen(true)}
+        className="fixed bottom-24 left-4 z-40 w-12 h-12 rounded-full bg-gradient-to-br from-amber-400 to-amber-600 hover:from-amber-500 hover:to-amber-700 text-neutral-950 flex items-center justify-center shadow-[0_4px_20px_rgba(245,158,11,0.35)] cursor-pointer border border-amber-400/20 active:scale-95 transition-all"
+        title="Leave Feedback"
+      >
+        <MessageSquare className="w-5 h-5 fill-neutral-950/10 stroke-[2.5]" />
+      </motion.button>
+
+      {/* Dynamic Feedback Submission Modal */}
+      <FeedbackModal
+        isOpen={isFeedbackOpen}
+        onClose={() => setIsFeedbackOpen(false)}
+        menuItems={menuItems}
+        onFeedbackSubmitted={fetchDynamicMenu}
+      />
     </div>
   );
 }
